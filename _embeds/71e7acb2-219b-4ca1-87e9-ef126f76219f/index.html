@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<!--
+  Kinetic Template
+  https://templatemo.com/tm-631-kinetic
+-->
+<html lang="en">
+    <head><script>(function embedBridge(config) {
+    const post = (m) => window.parent.postMessage({ uide: 'embed', ...m }, '*');
+    // The frame has an opaque origin, where storage and cookies throw. Give scripts in-memory stand-ins.
+    const memoryStorage = () => {
+        const m = new Map();
+        return {
+            getItem: (k) => (m.has(k) ? m.get(k) : null),
+            setItem: (k, v) => void m.set(String(k), String(v)),
+            removeItem: (k) => void m.delete(k),
+            clear: () => m.clear(),
+            key: (i) => [...m.keys()][i] ?? null,
+            get length() {
+                return m.size;
+            },
+        };
+    };
+    for (const name of ['localStorage', 'sessionStorage']) {
+        try {
+            void window[name];
+        }
+        catch {
+            Object.defineProperty(window, name, { value: memoryStorage(), configurable: true });
+        }
+    }
+    try {
+        void document.cookie;
+    }
+    catch {
+        const jar = new Map();
+        Object.defineProperty(document, 'cookie', {
+            configurable: true,
+            get: () => [...jar].map(([k, v]) => `${k}=${v}`).join('; '),
+            set: (v) => {
+                const [pair] = String(v).split(';');
+                const at = pair.indexOf('=');
+                if (at > 0)
+                    jar.set(pair.slice(0, at).trim(), pair.slice(at + 1).trim());
+            },
+        });
+    }
+    const anchorOf = (t) => (t instanceof Element ? t.closest('a[href]') : null);
+    if (config.edit) {
+        // Editing: links don't navigate (the page's own interactions still work).
+        document.addEventListener('click', (e) => anchorOf(e.target) && e.preventDefault(), true);
+    }
+    else {
+        // Runs after the page's own handlers, so its smooth-scrolling and routing win.
+        window.addEventListener('click', (e) => {
+            const a = anchorOf(e.target);
+            if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey)
+                return;
+            const raw = a.getAttribute('href') ?? '';
+            // With a <base>, "#section" would otherwise load the page file itself.
+            if (raw.startsWith('#')) {
+                e.preventDefault();
+                const id = decodeURIComponent(raw.slice(1));
+                const target = id ? document.getElementById(id) : null;
+                if (target)
+                    target.scrollIntoView({ behavior: 'smooth' });
+                else if (!id)
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+            }
+            let url;
+            try {
+                url = new URL(a.href);
+            }
+            catch {
+                return;
+            }
+            const sameSite = url.origin === new URL(document.baseURI).origin;
+            if (sameSite && config.bundleDir === null)
+                return;
+            if (sameSite && config.bundleDir !== null && url.pathname.startsWith(config.bundleDir) && /\.html?$/i.test(url.pathname)) {
+                e.preventDefault();
+                post({ type: 'navigate', page: decodeURIComponent(url.pathname.slice(config.bundleDir.length)) });
+            }
+            else if (/^(https?|mailto|tel):$/.test(url.protocol)) {
+                e.preventDefault();
+                window.open(url.href, '_blank', 'noopener');
+            }
+        });
+        return;
+    }
+    // ---- Edit mode: outline editable text and images; double-click to edit ----
+    const style = document.createElement('style');
+    style.textContent =
+        '[data-uide-t]:hover,[data-uide-i]:hover{outline:2px dashed #6366f1!important;outline-offset:2px;cursor:text}' +
+            '[data-uide-i]:hover{cursor:pointer}[data-uide-editing]{outline:2px solid #6366f1!important;outline-offset:2px}';
+    document.head.appendChild(style);
+    const nodeOf = (el) => (el && el.closest('[data-uide-n]')?.getAttribute('data-uide-n')) || '';
+    document.addEventListener('mousedown', (e) => {
+        if (!config.linked)
+            return post({ type: 'select' });
+        const nodes = [];
+        for (let el = e.target instanceof Element ? e.target.closest('[data-uide-n]') : null; el; el = el.parentElement?.closest('[data-uide-n]') ?? null) {
+            nodes.push(el.getAttribute('data-uide-n'));
+        }
+        post({ type: 'select', nodes: nodes.join(',') });
+    }, true);
+    if (config.linked) {
+        style.textContent += '[data-uide-selected]{outline:2px solid #6366f1!important;outline-offset:2px}';
+        // The host (the editor) shows which element its selected component is.
+        window.addEventListener('message', (e) => {
+            const m = e.data;
+            if (e.source !== window.parent || !m || m.uide !== 'host' || m.type !== 'selected')
+                return;
+            document.querySelectorAll('[data-uide-selected]').forEach((el) => el.removeAttribute('data-uide-selected'));
+            if (typeof m.node !== 'string' || !/^[\w-]{1,20}$/.test(m.node))
+                return;
+            const el = document.querySelector(`[data-uide-n="${m.node}"]`);
+            if (!el)
+                return;
+            el.setAttribute('data-uide-selected', '');
+            const r = el.getBoundingClientRect();
+            if (r.bottom < 0 || r.top > window.innerHeight)
+                el.scrollIntoView({ block: 'center' });
+        });
+    }
+    document.addEventListener('dblclick', (e) => {
+        if (!(e.target instanceof Element))
+            return;
+        const img = e.target.closest('img[data-uide-i]');
+        if (img) {
+            e.preventDefault();
+            e.stopPropagation();
+            post({ type: 'image', key: img.getAttribute('data-uide-i'), src: img.currentSrc || img.src, node: nodeOf(img) });
+            return;
+        }
+        const el = e.target.closest('[data-uide-t]');
+        if (!el || el.isContentEditable)
+            return;
+        e.preventDefault();
+        e.stopPropagation();
+        startEditing(el);
+    }, true);
+    /**
+     * The text as typed: not innerText, which applies CSS such as text-transform: uppercase. Source
+     * whitespace (indentation, line breaks in the HTML) collapses as the browser displays it; only
+     * <br> line breaks are kept.
+     */
+    function plainText(el) {
+        const lines = [''];
+        const walk = (node) => {
+            if (node.nodeName === 'BR')
+                lines.push('');
+            else if (node.nodeType === Node.TEXT_NODE)
+                lines[lines.length - 1] += (node.textContent ?? '').replace(/\s+/g, ' ');
+            else
+                node.childNodes.forEach(walk);
+        };
+        walk(el);
+        return lines.map((l) => l.replace(/ +/g, ' ').trim()).join('\n');
+    }
+    function startEditing(el) {
+        const before = el.innerHTML;
+        const beforeText = plainText(el);
+        let done = false;
+        const finish = (commit) => {
+            if (done)
+                return;
+            done = true;
+            el.removeAttribute('contenteditable');
+            el.removeAttribute('data-uide-editing');
+            el.removeEventListener('keydown', onKey, true);
+            el.removeEventListener('blur', onBlur);
+            const text = plainText(el);
+            if (!commit || text.trim() === '')
+                el.innerHTML = before;
+            else if (text !== beforeText)
+                post({ type: 'text', key: el.getAttribute('data-uide-t'), text, node: nodeOf(el) });
+        };
+        const onKey = (e) => {
+            // Keep the page's own keyboard handlers out of the way while typing.
+            e.stopPropagation();
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                finish(false);
+            }
+            else if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                finish(true);
+            }
+        };
+        const onBlur = () => finish(true);
+        el.setAttribute('data-uide-editing', '');
+        el.setAttribute('contenteditable', 'plaintext-only');
+        el.addEventListener('keydown', onKey, true);
+        el.addEventListener('blur', onBlur);
+        el.focus();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+    }
+})({"edit":false,"bundleDir":null});</script>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>The Kinetic // Experimental Interactive Studio</title>
+        <meta name="description" content="The Kinetic - an experimental, mechanically advanced creative agency interface built with pure vanilla HTML, CSS and JS.">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="templatemo-631-kinetic-style.css">
+    </head>
+    <body data-uide-n="0">
+        <!-- ====================== TOP BAR ====================== -->
+        <nav data-uide-n="1" class="topbar">
+            <a data-uide-t="0" data-uide-n="2" class="brand" href="#hero">KIN<span data-uide-n="3">E</span>TIC</a>
+            <div data-uide-n="4" class="nav-index">
+                <a data-uide-t="1" data-uide-n="5" href="#hero">01 / String</a>
+                <a data-uide-t="2" data-uide-n="6" href="#projects">02 / Matrix</a>
+                <a data-uide-t="3" data-uide-n="7" href="#reveal">03 / Lenticular</a>
+                <a data-uide-t="4" data-uide-n="8" href="#initiate">04 / Initiate</a>
+            </div>
+        </nav>
+        <!-- ====================== 01 HERO ====================== -->
+        <section data-uide-n="9" class="hero" id="hero">
+            <h1 data-uide-t="5" data-uide-n="10" class="hero-title">KIN<b data-uide-n="11">E</b>TIC</h1>
+            <svg data-uide-n="12" class="string-svg" id="stringSvg" preserveAspectRatio="none" aria-hidden="true">
+                <path data-uide-n="13" class="string-path" id="stringPath"/>
+                <circle data-uide-n="14" class="string-anchor" id="anchorL" r="5"/>
+                <circle data-uide-n="15" class="string-anchor" id="anchorR" r="5"/>
+                <circle data-uide-n="16" class="string-grip" id="grip" r="7"/>
+            </svg>
+            <div data-uide-n="17" class="hero-foot">
+                <span data-uide-t="6" data-uide-n="18" class="mono-label">Vanguard Interactive Studio</span>
+                <p data-uide-t="7" data-uide-n="19">Pull the string. Drag the matrix. Sweep the print. Every surface on this page is a machine you operate with motion.</p>
+            </div>
+            <div data-uide-t="8" data-uide-n="20" class="hero-hint">[ move cursor to bend ]</div>
+        </section>
+        <!-- ====================== 02 MATRIX ====================== -->
+        <section data-uide-n="21" class="matrix-wrap" id="projects">
+            <div data-uide-n="22" class="section-head">
+                <h2 data-uide-t="9" data-uide-n="23">Tushar Priti Pradeep Kakade</h2>
+                <p data-uide-t="10" data-uide-n="25">Nine works on a flat grid. Select any cell to force it open. The other eight collapse into strips.</p>
+            </div>
+            <div data-uide-n="26" class="matrix" id="matrix">
+                <!-- swap images/project-01.jpg ... project-09.jpg with your own -->
+                <div data-uide-n="27" class="cell" tabindex="0" role="button" aria-label="Project Helix">
+                    <div data-uide-n="28" class="cell-media" style="background-image:url('images/project-01.jpg')"></div>
+                    <div data-uide-t="11" data-uide-n="29" class="cell-num">01</div>
+                    <div data-uide-t="12" data-uide-n="30" class="cell-name">Helix</div>
+                    <div data-uide-t="13" data-uide-n="31" class="cell-detail">A generative identity system that rewrites its own logotype on every page load.</div>
+                    <div data-uide-t="14" data-uide-n="32" class="cell-cat">Brand / Code</div>
+                </div>
+                <div data-uide-n="33" class="cell" tabindex="0" role="button" aria-label="Project Drift">
+                    <div data-uide-n="34" class="cell-media" style="background-image:url('images/project-02.jpg')"></div>
+                    <div data-uide-t="15" data-uide-n="35" class="cell-num">02</div>
+                    <div data-uide-t="16" data-uide-n="36" class="cell-name">Drift</div>
+                    <div data-uide-t="17" data-uide-n="37" class="cell-detail">Scroll-driven editorial for a kinetic typeface foundry, set entirely in motion type.</div>
+                    <div data-uide-t="18" data-uide-n="38" class="cell-cat">Web / Type</div>
+                </div>
+                <div data-uide-n="39" class="cell" tabindex="0" role="button" aria-label="Project Onyx">
+                    <div data-uide-n="40" class="cell-media" style="background-image:url('images/project-03.jpg')"></div>
+                    <div data-uide-t="19" data-uide-n="41" class="cell-num">03</div>
+                    <div data-uide-t="20" data-uide-n="42" class="cell-name">Onyx</div>
+                    <div data-uide-t="21" data-uide-n="43" class="cell-detail">Dark-mode commerce flow with physics-based add-to-cart and elastic transitions.</div>
+                    <div data-uide-t="22" data-uide-n="44" class="cell-cat">Product / UX</div>
+                </div>
+                <div data-uide-n="45" class="cell" tabindex="0" role="button" aria-label="Project Pulse">
+                    <div data-uide-n="46" class="cell-media" style="background-image:url('images/project-04.jpg')"></div>
+                    <div data-uide-t="23" data-uide-n="47" class="cell-num">04</div>
+                    <div data-uide-t="24" data-uide-n="48" class="cell-name">Pulse</div>
+                    <div data-uide-t="25" data-uide-n="49" class="cell-detail">A real-time audio-reactive visual built on the Web Audio API and raw canvas.</div>
+                    <div data-uide-t="26" data-uide-n="50" class="cell-cat">Sound / Visual</div>
+                </div>
+                <div data-uide-n="51" class="cell" tabindex="0" role="button" aria-label="Project Vellum">
+                    <div data-uide-n="52" class="cell-media" style="background-image:url('images/project-05.jpg')"></div>
+                    <div data-uide-t="27" data-uide-n="53" class="cell-num">05</div>
+                    <div data-uide-t="28" data-uide-n="54" class="cell-name">Vellum</div>
+                    <div data-uide-t="29" data-uide-n="55" class="cell-detail">Tactile portfolio with page-turn mechanics and a paper-grain shader fallback.</div>
+                    <div data-uide-t="30" data-uide-n="56" class="cell-cat">Editorial</div>
+                </div>
+                <div data-uide-n="57" class="cell" tabindex="0" role="button" aria-label="Project Signal">
+                    <div data-uide-n="58" class="cell-media" style="background-image:url('images/project-06.jpg')"></div>
+                    <div data-uide-t="31" data-uide-n="59" class="cell-num">06</div>
+                    <div data-uide-t="32" data-uide-n="60" class="cell-name">Signal</div>
+                    <div data-uide-t="33" data-uide-n="61" class="cell-detail">Broadcast microsite where every UI control doubles as a working oscilloscope.</div>
+                    <div data-uide-t="34" data-uide-n="62" class="cell-cat">Campaign</div>
+                </div>
+                <div data-uide-n="63" class="cell" tabindex="0" role="button" aria-label="Project Forge">
+                    <div data-uide-n="64" class="cell-media" style="background-image:url('images/project-07.jpg')"></div>
+                    <div data-uide-t="35" data-uide-n="65" class="cell-num">07</div>
+                    <div data-uide-t="36" data-uide-n="66" class="cell-name">Forge</div>
+                    <div data-uide-t="37" data-uide-n="67" class="cell-detail">Configurator for a hardware studio with a live exploded-view 3D assembly.</div>
+                    <div data-uide-t="38" data-uide-n="68" class="cell-cat">Industrial</div>
+                </div>
+                <div data-uide-n="69" class="cell" tabindex="0" role="button" aria-label="Project Lumen">
+                    <div data-uide-n="70" class="cell-media" style="background-image:url('images/project-08.jpg')"></div>
+                    <div data-uide-t="39" data-uide-n="71" class="cell-num">08</div>
+                    <div data-uide-t="40" data-uide-n="72" class="cell-name">Lumen</div>
+                    <div data-uide-t="41" data-uide-n="73" class="cell-detail">Light-installation control panel mapped to a single sweeping gesture surface.</div>
+                    <div data-uide-t="42" data-uide-n="74" class="cell-cat">Spatial</div>
+                </div>
+                <div data-uide-n="75" class="cell" tabindex="0" role="button" aria-label="Project Apex">
+                    <div data-uide-n="76" class="cell-media" style="background-image:url('images/project-09.jpg')"></div>
+                    <div data-uide-t="43" data-uide-n="77" class="cell-num">09</div>
+                    <div data-uide-t="44" data-uide-n="78" class="cell-name">Apex</div>
+                    <div data-uide-t="45" data-uide-n="79" class="cell-detail">Awards-shortlisted launch site for an EV brand, driven entirely by scroll velocity.</div>
+                    <div data-uide-t="46" data-uide-n="80" class="cell-cat">Launch</div>
+                </div>
+            </div>
+        </section>
+        <!-- ====================== 03 LENTICULAR ====================== -->
+        <section data-uide-n="81" class="reveal" id="reveal">
+            <div data-uide-n="82" class="reveal-cap">
+                <span data-uide-t="47" data-uide-n="83" class="mono-label">Lenticular Print // Live</span>
+                <h2 data-uide-t="48" data-uide-n="84">SWEEP TO <i data-uide-n="85">FLIP</i> THE FRAME</h2>
+                <p data-uide-t="49" data-uide-n="86" style="font-size:.64rem;
+                          letter-spacing:.22em;
+                          text-transform:uppercase;
+                          color:var(--accent-1);
+                          margin-top:10px">[ run the cursor past both edges for a full flip ]</p>
+            </div>
+            <div data-uide-n="87" class="lenti-stage" id="lentiStage">
+                <div data-uide-n="88" class="lenti" id="lenti" aria-hidden="true" data-front="images/kinetic-10.jpg" data-back="images/kinetic-11.jpg"></div>
+            </div>
+        </section>
+        <!-- ====================== 04 INITIATE ====================== -->
+        <footer data-uide-n="89" class="initiate" id="initiate">
+            <div data-uide-n="90" class="initiate-inner">
+                <h2 data-uide-t="50" data-uide-n="91" class="scatter" id="scatter">TEMPLATE.MO // INITIATE</h2>
+                <div data-uide-n="92" class="sub-wrap" id="subWrap">
+                    <form data-uide-n="93" class="subscribe" id="subscribe" novalidate>
+                        <input data-uide-n="94" type="email" class="sub-input" id="subEmail" placeholder="you@studio.com" aria-label="Email address" required>
+                        <button data-uide-t="51" data-uide-n="95" type="submit" class="sub-btn">Initiate</button>
+                    </form>
+                    <div data-uide-t="52" data-uide-n="96" class="sub-note" id="subNote">Join the drop list. No noise.</div>
+                </div>
+            </div>
+            <div data-uide-n="97" class="sig-foot">
+                <span data-uide-t="53" data-uide-n="98">The Kinetic // Experimental Build 1.0</span>
+                <span data-uide-t="54" data-uide-n="99">Click the type to scatter or reassemble</span>
+                <span data-uide-n="100">Free HTML Template by <a data-uide-t="55" data-uide-n="101" href="https://templatemo.com" rel="nofollow" target="_blank">TemplateMo</a></span>
+            </div>
+        </footer>
+        <script src="templatemo-631-kinetic-script.js"></script>
+    </body>
+</html>
